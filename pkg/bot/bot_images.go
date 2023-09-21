@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -33,13 +34,22 @@ func (b *Bot) downloadImage(fileID string) ([]byte, error) {
 }
 
 // getImagePath checks if an image file already exists locally; if not, it downloads the image from imageURL and saves it locally.
-func (b *Bot) getImagePath(imageURL string) (string, error) {
+func (b *Bot) getImagePath(imageURL string, entitytype string) (string, error) {
 	filename := filepath.Base(imageURL)
-	localImagePath := fmt.Sprintf("images/products/%s", filename)
+	var dirname string
+	switch entitytype {
+	case "product":
+		dirname = "products"
+	case "account":
+		dirname = "accounts"
+	default:
+		dirname = "default"
+	}
+	localImagePath := fmt.Sprintf("images/%s/%s", dirname, filename)
 
 	if _, err := os.Stat(localImagePath); os.IsNotExist(err) {
 		// Create the directory if it does not exist
-		if err := createDirIfNotExist("images/products"); err != nil {
+		if err := createDirIfNotExist(fmt.Sprintf("images/%s", dirname)); err != nil {
 			return "", fmt.Errorf("creating directory: %w", err)
 		}
 
@@ -73,16 +83,38 @@ func createDirIfNotExist(dir string) error {
 	return nil
 }
 
-// sendProductImage gets a local image path and sends the image to the chat identified by chatID.
-func (b *Bot) sendProductImage(chatID int64, imageURL string) {
-	localImagePath, err := b.getImagePath(imageURL)
+// sendImage gets a local image path and sends the image to the chat identified by chatID.
+func (b *Bot) sendImage(chatID int64, imageURL string, entityType string) {
+	localImagePath, err := b.getImagePath(imageURL, entityType)
 	if err != nil {
 		log.Printf("Error getting local image path: %v", err)
 		return
 	}
 
-	// Send product image
+	// Send  image
 	if _, err := b.bot.Send(tgbotapi.NewPhotoUpload(chatID, localImagePath)); err != nil {
 		log.Printf("Error sending image: %v", err)
 	}
+}
+
+func (b *Bot) deleteOldImage(name string) {
+
+	// Construct old image path
+	oldImgPath := fmt.Sprintf("images/accounts/%s", name)
+
+	// Delete old image
+	err := os.Remove(oldImgPath)
+	if err != nil && !os.IsNotExist(err) {
+		log.Printf("Error deleting old image %s: %v", oldImgPath, err)
+	}
+
+}
+
+func (b *Bot) downloadImageForEditing(msg *tgbotapi.Message) ([]byte, error) {
+	if msg.Photo == nil {
+		return nil, errors.New("no photo found in the message")
+	}
+	photoSize := (*msg.Photo)[len(*msg.Photo)-1]
+	fileID := photoSize.FileID
+	return b.downloadImage(fileID)
 }

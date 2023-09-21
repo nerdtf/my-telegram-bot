@@ -115,6 +115,20 @@ type CartItem struct {
 	Price       float64 `json:"product_price"`
 }
 
+// AccountInfo represents a user's information
+type AccountInfo struct {
+	Data struct {
+		FirstName         string    `json:"first_name"`
+		LastName          string    `json:"last_name"`
+		Address           string    `json:"address"`
+		Email             string    `json:"email"`
+		Phone             string    `json:"phone"`
+		Image             string    `json:"image"`
+		CreatedDate       time.Time `json:"created_at"`
+		DaysSinceCreation int       `json:"days_since_creation,omitempty"`
+	} `json:"data"`
+}
+
 // CartResponse encapsulates the list of cart items returned from the API.
 type CartResponse struct {
 	Data struct {
@@ -244,6 +258,14 @@ func (api *APIClient) decodeResponse(resp *http.Response, result interface{}) er
 				return &Error{Err: err, Message: "Token has expired"}
 			}
 		}
+		// Check if the status code indicates a validation error
+		if resp.StatusCode == http.StatusUnprocessableEntity {
+			var ve ValidationError
+			if err := json.Unmarshal(bodyBytes, &ve); err != nil {
+				return &Error{Err: err, Message: "Failed to decode validation error"}
+			}
+			return &Error{Err: errors.New("Validation error"), Message: "Validation error", Details: &ve}
+		}
 		return &Error{Err: errors.New(string(bodyBytes)), Message: "API error"}
 	}
 
@@ -288,17 +310,67 @@ func (api *APIClient) Login(data LoginData) (string, error) {
 }
 
 // makeAPIRequest creates and sends an API request. If the token is expired, it refreshes the token and retries.
-func (api *APIClient) makeAPIRequest(method, url string, body io.Reader, authClient *auth.AuthClient, chatID int64) (*http.Response, error) {
+// func (api *APIClient) makeAPIRequest(method, url string, body io.Reader, authClient *auth.AuthClient, chatID int64, contentType ...string) (*http.Response, error) {
+// 	defaultContentType := "application/json"
+
+// 	for i := 0; i < 2; i++ {
+// 		req, err := http.NewRequest(method, url, body)
+// 		if err != nil {
+// 			return nil, &Error{Err: err, Message: "New request error"}
+// 		}
+// 		// Add the token to the request headers
+// 		token := authClient.GetToken(chatID)
+// 		req.Header.Add("Authorization", "Bearer "+token)
+// 		// Set content type
+// 		if len(contentType) > 0 && contentType[0] != "" {
+// 			req.Header.Add("Content-Type", contentType[0])
+// 		} else {
+// 			req.Header.Add("Content-Type", defaultContentType)
+// 		}
+
+// 		req.Header.Add("Accept", "application/json")
+
+// 		response, err := api.client.Do(req)
+// 		if err != nil {
+// 			return nil, &Error{Err: err, Message: "Response error"}
+// 		}
+// 		// If the response contains a token expired error, refresh the token and retry the API call
+// 		if api.isTokenExpired(response) {
+// 			if err := authClient.RefreshToken(api.BaseURL, chatID); err != nil {
+// 				return nil, &Error{Err: err, Message: "Error while refreshing token"}
+// 			}
+// 			continue
+// 		}
+// 		return response, nil
+// 	}
+
+// 	return nil, errors.New("failed to make API request with token refresh")
+// }
+
+func (api *APIClient) makeAPIRequest(method, url string, body io.Reader, authClient *auth.AuthClient, chatID int64, contentType ...string) (*http.Response, error) {
+	defaultContentType := "application/json"
+
+	// Convert the io.Reader content to a byte slice
+	bodyBytes, err := readerToBytes(body)
+	if err != nil {
+		return nil, &Error{Err: err, Message: "Failed to read body content"}
+	}
 
 	for i := 0; i < 2; i++ {
-		req, err := http.NewRequest(method, url, body)
+		req, err := http.NewRequest(method, url, bytes.NewReader(bodyBytes))
 		if err != nil {
 			return nil, &Error{Err: err, Message: "New request error"}
 		}
 		// Add the token to the request headers
 		token := authClient.GetToken(chatID)
 		req.Header.Add("Authorization", "Bearer "+token)
-		req.Header.Add("Content-Type", "application/json")
+		// Set content type
+		if len(contentType) > 0 && contentType[0] != "" {
+			req.Header.Add("Content-Type", contentType[0])
+		} else {
+			req.Header.Add("Content-Type", defaultContentType)
+		}
+
 		req.Header.Add("Accept", "application/json")
 
 		response, err := api.client.Do(req)
@@ -316,6 +388,19 @@ func (api *APIClient) makeAPIRequest(method, url string, body io.Reader, authCli
 	}
 
 	return nil, errors.New("failed to make API request with token refresh")
+}
+
+func readerToBytes(reader io.Reader) ([]byte, error) {
+	if reader == nil {
+		return nil, nil
+	}
+
+	var buf bytes.Buffer
+	_, err := buf.ReadFrom(reader)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // GetProducts fetches a list of products with pagination. It also updates the 'InCart' field for each product based on the items in the cart.
@@ -456,6 +541,83 @@ func (api *APIClient) CompleteOrder(authClient *auth.AuthClient, chatID int64) (
 		return nil, err
 	}
 	return &orderResponse, nil
+}
+
+func calcDifferenceInDates(date time.Time) int {
+	// Get current time
+	currentTime := time.Now()
+
+	// Calculate difference in days
+	daysDiff := currentTime.Sub(date).Hours() / 24
+
+	return int(daysDiff)
+}
+
+func (api *APIClient) GetAccountInfo(authClient *auth.AuthClient, chatID int64) (*AccountInfo, error) {
+	url := api.BaseURL + "/client"
+	resp, err := api.makeAPIRequest("", url, nil, authClient, chatID)
+
+	if err != nil {
+		return nil, err
+	}
+
+	var accountInfo AccountInfo
+	if err := api.decodeResponse(resp, &accountInfo); err != nil {
+		return nil, err
+	}
+
+	accountInfo.Data.DaysSinceCreation = calcDifferenceInDates(accountInfo.Data.CreatedDate)
+
+	return &accountInfo, nil
+}
+
+// UpdateField updates a specific field for a user's account.
+func (api *APIClient) UpdateField(chatID int64, authClient *auth.AuthClient, fieldName string, fieldValue interface{}) (*AccountInfo, error) {
+	url := api.BaseURL + "/client/update"
+
+	var b bytes.Buffer
+	w := multipart.NewWriter(&b)
+	var contentType string
+
+	if fieldName == "image" {
+		imageData, ok := fieldValue.([]byte)
+		if !ok {
+			return nil, &Error{Message: "Expected image data as []byte"}
+		}
+		part, err := w.CreateFormFile("image", "profile_image")
+		if err != nil {
+			return nil, &Error{Err: err, Message: "Failed to create multipart form"}
+		}
+		part.Write(imageData)
+	} else {
+		valueStr, ok := fieldValue.(string)
+		if !ok {
+			return nil, &Error{Message: "Expected value as string"}
+		}
+		w.WriteField(fieldName, valueStr)
+	}
+
+	if err := w.Close(); err != nil {
+		return nil, &Error{Err: err, Message: "Failed to close writer"}
+	}
+
+	body := &b
+	contentType = w.FormDataContentType()
+
+	// Create the request
+	resp, err := api.makeAPIRequest(http.MethodPost, url, body, authClient, chatID, contentType)
+	if err != nil {
+		return nil, err
+	}
+
+	var accountInfo AccountInfo
+	if err := api.decodeResponse(resp, &accountInfo); err != nil {
+		return nil, err
+	}
+	accountInfo.Data.DaysSinceCreation = calcDifferenceInDates(accountInfo.Data.CreatedDate)
+
+	return &accountInfo, nil
+
 }
 
 // Add other methods for fetching products and managing orders here.

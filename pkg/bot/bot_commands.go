@@ -128,7 +128,7 @@ func (b *Bot) handleMakeOrder(chatID int64, page int) {
 	b.InitUserCart(chatID)
 	for _, product := range products {
 		if product.Image != "" {
-			b.sendProductImage(chatID, product.Image)
+			b.sendImage(chatID, product.Image, "product")
 		}
 
 		productInfo := fmt.Sprintf("<b>Name:</b> %s\n<b>Price:</b> $%.2f\n<b>Weight:</b> %d g\n<b>Description:</b> %s",
@@ -179,6 +179,24 @@ func (b *Bot) handleCallbackQuery(callbackQuery *tgbotapi.CallbackQuery) {
 		b.handleMakeOrder(chatID, page)
 	case data == "search":
 		// Implement search functionality here
+	case data == "upload_avatar" || data == "edit_image":
+		b.setUserEditingState(chatID, "image")
+		b.replyWithMessage(chatID, "Please upload your new profile image.", nil)
+	case strings.HasPrefix(data, "edit_"):
+		field := strings.TrimPrefix(data, "edit_")
+		b.setUserEditingState(chatID, field)
+		b.replyWithMessage(chatID, fmt.Sprintf("Please enter the new value for your %s:", field), nil)
+	case callbackQuery.Data == "retry_update":
+		field := b.getUserEditingState(chatID)
+		if field != "" {
+			b.replyWithMessage(chatID, fmt.Sprintf("Please enter the new value for your %s:", field), nil)
+		} else {
+			b.replyWithMessage(chatID, "Please start the update process again.", nil)
+		}
+	case callbackQuery.Data == "cancel_update":
+		b.clearUserEditingState(chatID)
+		b.replyWithMessage(chatID, "Account update process canceled.", nil)
+
 	case data == "back":
 		b.sendMenu(chatID)
 	case data == "edit_cart":
@@ -366,4 +384,53 @@ func (b *Bot) handleCompleteOrder(chatID int64) {
 
 	// Clear the cart entirely
 	delete(b.cart, chatID)
+}
+
+// handleMyAccount fetches and displays the user's account details and provides editing options.
+func (b *Bot) handleMyAccount(chatID int64, accountInfoFromUpdate *api.AccountInfo) {
+
+	var accountInfo *api.AccountInfo
+	// Fetch account info
+	if accountInfoFromUpdate == nil {
+		var err error
+		accountInfo, err = b.apiClient.GetAccountInfo(b.auth, chatID)
+		if err != nil {
+			b.replyWithMessage(chatID, "Error fetching account details. Please try again later.", nil)
+			return
+		}
+	} else {
+		accountInfo = accountInfoFromUpdate
+	}
+
+	if accountInfo.Data.Image != "" {
+		b.sendImage(chatID, accountInfo.Data.Image, "account")
+		b.sendMessageWithEditButton(chatID, "Current Account Image", "edit_image")
+	} else {
+		// Create and send the upload button
+		uploadButton := tgbotapi.NewInlineKeyboardButtonData("Upload Image", "upload_avatar")
+		buttonMsg := tgbotapi.NewMessage(chatID, "You don't have an avatar image yet. Please upload one:")
+		buttonMsg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
+			tgbotapi.NewInlineKeyboardRow(uploadButton))
+		b.bot.Send(buttonMsg)
+	}
+
+	// Handle other fields
+	fields := DefaultAccountFields(accountInfo)
+	for _, field := range fields {
+		b.sendMessageWithEditButton(chatID, fmt.Sprintf("*%s* ➤ `%s`", field.Name, field.Value), field.EditData)
+	}
+
+	daysMessage := fmt.Sprintf("You are our favorite customer already for *%d* days! 🎉🥳", accountInfo.Data.DaysSinceCreation)
+	msg := tgbotapi.NewMessage(chatID, daysMessage)
+	msg.ParseMode = "Markdown"
+	b.bot.Send(msg)
+}
+
+func (b *Bot) sendMessageWithEditButton(chatID int64, msgText, editData string) {
+	editButton := tgbotapi.NewInlineKeyboardButtonData("✏️ Edit", editData)
+	keyboard := tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(editButton))
+	msg := tgbotapi.NewMessage(chatID, msgText)
+	msg.ReplyMarkup = keyboard
+	msg.ParseMode = "Markdown"
+	b.bot.Send(msg)
 }

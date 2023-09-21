@@ -19,11 +19,12 @@ type UserState struct {
 
 // Bot contains the Telegram Bot API, API client, authentication client, user states, and cart
 type Bot struct {
-	bot       *tgbotapi.BotAPI
-	apiClient *api.APIClient
-	auth      *auth.AuthClient
-	states    map[int64]*UserState
-	cart      map[int64]map[int]BotCartItem
+	bot               *tgbotapi.BotAPI
+	apiClient         *api.APIClient
+	auth              *auth.AuthClient
+	states            map[int64]*UserState
+	cart              map[int64]map[int]BotCartItem
+	userEditingStates map[int64]string
 }
 
 type BotCartItem struct {
@@ -44,23 +45,13 @@ func NewBot(token string, apiClient *api.APIClient, authClient *auth.AuthClient)
 	log.Printf("Authorized on account %s", bot.Self.UserName)
 
 	b := &Bot{
-		bot:       bot,
-		apiClient: apiClient,
-		auth:      authClient,
-		states:    make(map[int64]*UserState),
-		cart:      make(map[int64]map[int]BotCartItem),
+		bot:               bot,
+		apiClient:         apiClient,
+		auth:              authClient,
+		states:            make(map[int64]*UserState),
+		cart:              make(map[int64]map[int]BotCartItem),
+		userEditingStates: make(map[int64]string),
 	}
-	/*
-		// Retrieve the current state of the cart using the API client's GetCartItems method
-		cartItems, err := apiClient.GetCartItems(authClient, false)
-		if err != nil {
-			return nil, fmt.Errorf("Error retrieving cart items: %w", err)
-		}
-
-		// Populate the Bot's cart field with the retrieved cart items
-		for _, item := range cartItems {
-			b.cart[item.ProductID] = item.Quantity
-		}*/
 
 	return b, nil
 }

@@ -2,6 +2,7 @@ package bot
 
 import (
 	"fmt"
+	"net/url"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
 )
@@ -76,28 +77,36 @@ func createMenuKeyboard() tgbotapi.ReplyKeyboardMarkup {
 }
 
 // createPaginationKeyboard creates a keyboard with "Previous", "Next", and "Complete Order" buttons.
-func createPaginationKeyboard(page int, hasNextPage bool) tgbotapi.InlineKeyboardMarkup {
-
+func createPaginationKeyboard(page int, hasNextPage bool, search string) tgbotapi.InlineKeyboardMarkup {
+	var searchButton tgbotapi.InlineKeyboardButton
+	// URL encode the search query
+	encodedSearch := ""
+	if search != "" {
+		encodedSearch = "_" + url.QueryEscape(search)
+		searchButton = tgbotapi.NewInlineKeyboardButtonData("Searching for: "+search, "search")
+	} else {
+		searchButton = tgbotapi.NewInlineKeyboardButtonData("Search 🔍", "search")
+	}
 	// Create "Previous Page" and "Next Page" buttons
 	prevPageData := "disabled"
 	nextPageData := "disabled"
 	if page > 1 {
-		prevPageData = fmt.Sprintf("previous_page_%d", page)
+		prevPageData = fmt.Sprintf("previous_page_%d%s", page, encodedSearch)
 	}
 	if hasNextPage {
-		nextPageData = fmt.Sprintf("next_page_%d", page)
+		nextPageData = fmt.Sprintf("next_page_%d%s", page, encodedSearch)
 	}
 
 	return tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("Search 🔍", "search"),
-			tgbotapi.NewInlineKeyboardButtonData("Back ⬅️", "back"),
-			tgbotapi.NewInlineKeyboardButtonData("Cart 🛒", "cart"),
+			tgbotapi.NewInlineKeyboardButtonData("Previous Page", prevPageData),
+			searchButton,
+			tgbotapi.NewInlineKeyboardButtonData("Next Page", nextPageData),
 		),
 		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("Previous Page", prevPageData),
+			tgbotapi.NewInlineKeyboardButtonData("Back ⬅️", "back"),
 			tgbotapi.NewInlineKeyboardButtonData("Complete Order 📦", "complete_order"),
-			tgbotapi.NewInlineKeyboardButtonData("Next Page", nextPageData),
+			tgbotapi.NewInlineKeyboardButtonData("Cart 🛒", "cart"),
 		),
 	)
 }

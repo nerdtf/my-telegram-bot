@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"my-telegram-bot/pkg/auth"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -67,27 +68,36 @@ type ValidationError struct {
 	Errors  map[string][]string
 }
 
+// OrderResponseItem represents a single order in the order response.
+type OrderResponseItem struct {
+	ID         int         `json:"id"`
+	ClientID   int         `json:"client_id"`
+	CourierID  int         `json:"courier_id"`
+	Status     string      `json:"status"`
+	TotalPrice float64     `json:"totalPrice"`
+	OrderItems []OrderItem `json:"orderItems"`
+}
+
 // OrderItem represents an item in an order.
 type OrderItem struct {
-	ID        int     `json:"id"`
-	OrderID   int     `json:"order_id"`
-	ProductID int     `json:"product_id"`
-	Quantity  int     `json:"quantity"`
-	Price     float64 `json:"price"`
-	CreatedAt string  `json:"created_at"`
-	UpdatedAt string  `json:"updated_at"`
+	ID          int     `json:"id"`
+	OrderID     int     `json:"order_id"`
+	ProductID   int     `json:"product_id"`
+	ProductName string  `json:"product_name"`
+	Quantity    int     `json:"quantity"`
+	Price       float64 `json:"price"`
+	CreatedAt   string  `json:"created_at"`
+	UpdatedAt   string  `json:"updated_at"`
 }
 
 // CompleteOrderResponse holds the response data for a completed order.
 type CompleteOrderResponse struct {
-	Data struct {
-		ID         int         `json:"id"`
-		ClientID   int         `json:"client_id"`
-		CourierID  int         `json:"courier_id"`
-		Status     string      `json:"status"`
-		TotalPrice float64     `json:"totalPrice"`
-		OrderItems []OrderItem `json:"orderItems"`
-	} `json:"data"`
+	Data OrderResponseItem `json:"data"`
+}
+
+// OrderHistoryResponse represents the response data for the order history endpoint.
+type OrderHistoryResponse struct {
+	Data []OrderResponseItem `json:"data"`
 }
 
 // Product represents a single product in the system.
@@ -310,43 +320,6 @@ func (api *APIClient) Login(data LoginData) (string, error) {
 }
 
 // makeAPIRequest creates and sends an API request. If the token is expired, it refreshes the token and retries.
-// func (api *APIClient) makeAPIRequest(method, url string, body io.Reader, authClient *auth.AuthClient, chatID int64, contentType ...string) (*http.Response, error) {
-// 	defaultContentType := "application/json"
-
-// 	for i := 0; i < 2; i++ {
-// 		req, err := http.NewRequest(method, url, body)
-// 		if err != nil {
-// 			return nil, &Error{Err: err, Message: "New request error"}
-// 		}
-// 		// Add the token to the request headers
-// 		token := authClient.GetToken(chatID)
-// 		req.Header.Add("Authorization", "Bearer "+token)
-// 		// Set content type
-// 		if len(contentType) > 0 && contentType[0] != "" {
-// 			req.Header.Add("Content-Type", contentType[0])
-// 		} else {
-// 			req.Header.Add("Content-Type", defaultContentType)
-// 		}
-
-// 		req.Header.Add("Accept", "application/json")
-
-// 		response, err := api.client.Do(req)
-// 		if err != nil {
-// 			return nil, &Error{Err: err, Message: "Response error"}
-// 		}
-// 		// If the response contains a token expired error, refresh the token and retry the API call
-// 		if api.isTokenExpired(response) {
-// 			if err := authClient.RefreshToken(api.BaseURL, chatID); err != nil {
-// 				return nil, &Error{Err: err, Message: "Error while refreshing token"}
-// 			}
-// 			continue
-// 		}
-// 		return response, nil
-// 	}
-
-// 	return nil, errors.New("failed to make API request with token refresh")
-// }
-
 func (api *APIClient) makeAPIRequest(method, url string, body io.Reader, authClient *auth.AuthClient, chatID int64, contentType ...string) (*http.Response, error) {
 	defaultContentType := "application/json"
 
@@ -404,10 +377,13 @@ func readerToBytes(reader io.Reader) ([]byte, error) {
 }
 
 // GetProducts fetches a list of products with pagination. It also updates the 'InCart' field for each product based on the items in the cart.
-func (api *APIClient) GetProducts(perPage int, page int, authClient *auth.AuthClient, chatID int64) ([]Product, bool, error) {
+func (api *APIClient) GetProducts(perPage int, page int, authClient *auth.AuthClient, chatID int64, search string) ([]Product, bool, error) {
 
-	url := fmt.Sprintf("%s/products?per_page=%d&page=%d", api.BaseURL, perPage, page)
-	resp, err := api.makeAPIRequest("", url, nil, authClient, chatID)
+	urlStr := fmt.Sprintf("%s/products?per_page=%d&page=%d", api.BaseURL, perPage, page)
+	if search != "" {
+		urlStr = fmt.Sprintf("%s&search=%s", urlStr, url.QueryEscape(search))
+	}
+	resp, err := api.makeAPIRequest("", urlStr, nil, authClient, chatID)
 	if err != nil {
 		return nil, false, err
 	}
@@ -620,4 +596,17 @@ func (api *APIClient) UpdateField(chatID int64, authClient *auth.AuthClient, fie
 
 }
 
-// Add other methods for fetching products and managing orders here.
+// GetOrderHistory retrieves the order history and returns the order details.
+func (api *APIClient) GetOrderHistory(authClient *auth.AuthClient, chatID int64) (*OrderHistoryResponse, error) {
+	url := api.BaseURL + "/orders"
+	resp, err := api.makeAPIRequest("", url, nil, authClient, chatID)
+
+	if err != nil {
+		return nil, err
+	}
+	var orderHistoryResponse OrderHistoryResponse
+	if err := api.decodeResponse(resp, &orderHistoryResponse); err != nil {
+		return nil, err
+	}
+	return &orderHistoryResponse, nil
+}

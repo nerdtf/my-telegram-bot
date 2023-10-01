@@ -32,20 +32,19 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 	// Handle text-based commands
 	switch msg.Text {
 	case "Make Order 🛍️":
-		b.handleMakeOrder(msg.Chat.ID, 1)
+		b.handleMakeOrder(msg.Chat.ID, 1, "")
 	case "My Account 📋":
 		b.handleMyAccount(msg.Chat.ID, nil)
+	case "Order's History 📖":
+		b.handleOrderHistory(msg.Chat.ID)
+	case "Complete Order 📦":
+		b.handleCompleteOrder(msg.Chat.ID, true)
 	case "Cart 🛒":
-		err := b.InitUserCart(msg.Chat.ID)
-		if err != nil {
-			log.Printf("Error initializing user cart: %v", err)
-		}
-		// Uncomment the appropriate handlers as they become available
-		// b.handleOrdersHistory(msg.Chat.ID)
-		// b.handleCart(msg.Chat.ID)
+		b.handleCartAction(msg.Chat.ID)
 	default:
 		// Handle user state-specific actions
-		if state, ok := b.states[msg.Chat.ID]; ok {
+		state := b.GetUserState(msg.Chat.ID)
+		if state != nil {
 			switch state.CurrentStep {
 			case "address":
 				b.handleAddress(msg)
@@ -53,6 +52,8 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 				b.handleEmail(msg)
 			case "image":
 				b.handleImage(msg)
+			case "search":
+				b.handleMakeOrder(msg.Chat.ID, 1, msg.Text)
 			default:
 				b.replyWithMessage(msg.Chat.ID, msg.Text, nil)
 			}

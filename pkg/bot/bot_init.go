@@ -5,6 +5,7 @@ import (
 	"log"
 	"my-telegram-bot/pkg/api"
 	"my-telegram-bot/pkg/auth"
+	"sync"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
 )
@@ -19,6 +20,7 @@ type UserState struct {
 
 // Bot contains the Telegram Bot API, API client, authentication client, user states, and cart
 type Bot struct {
+	mu                sync.RWMutex
 	bot               *tgbotapi.BotAPI
 	apiClient         *api.APIClient
 	auth              *auth.AuthClient

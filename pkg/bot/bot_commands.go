@@ -5,8 +5,10 @@ import (
 	"html"
 	"log"
 	"my-telegram-bot/pkg/api"
+	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
 )
@@ -14,9 +16,7 @@ import (
 // handleStart sends a welcome message to the user when the bot is started.
 func (b *Bot) handleStart(chatID int64) {
 	text := "Welcome to the My Telegram Bot! \nIf you need any help, just type /help. \nPlease, share your contact to create an account"
-	msg := tgbotapi.NewMessage(chatID, text)
-	msg.ReplyMarkup = createReplyKeyboard()
-	b.bot.Send(msg)
+	b.sendTextMessageWithReplyMarkup(chatID, text, createReplyKeyboard())
 }
 
 // handleAddress processes the address shared by the user.
@@ -25,15 +25,14 @@ func (b *Bot) handleAddress(msg *tgbotapi.Message) {
 	// Check if the user sent a location or a text message
 	if msg.Location != nil {
 		// Use the latitude and longitude to get an address
-		// You may need a geocoding API to do this.
-		b.states[msg.Chat.ID].Data.Address = fmt.Sprintf("Lat: %f, Long: %f", msg.Location.Latitude, msg.Location.Longitude)
+		b.setDataForState(msg.Chat.ID, setAddress, fmt.Sprintf("Lat: %f, Long: %f", msg.Location.Latitude, msg.Location.Longitude))
 	} else {
 		// Use the provided address
-		b.states[msg.Chat.ID].Data.Address = msg.Text
+		b.setDataForState(msg.Chat.ID, setAddress, msg.Text)
 	}
 
 	// Ask for the email
-	b.states[msg.Chat.ID].CurrentStep = "email"
+	b.setDataForState(msg.Chat.ID, setCurrentStep, "email")
 
 	b.replyWithMessage(msg.Chat.ID, "Please enter your email address:", tgbotapi.ReplyKeyboardRemove{
 		RemoveKeyboard: true,
@@ -43,9 +42,9 @@ func (b *Bot) handleAddress(msg *tgbotapi.Message) {
 
 // handleEmail processes the email shared by the user.
 func (b *Bot) handleEmail(msg *tgbotapi.Message) {
-	b.states[msg.Chat.ID].Data.Email = msg.Text
+	b.setDataForState(msg.Chat.ID, setEmail, msg.Text)
 	// Ask for the image
-	b.states[msg.Chat.ID].CurrentStep = "image"
+	b.setDataForState(msg.Chat.ID, setCurrentStep, "image")
 	b.replyWithMessage(msg.Chat.ID, "Please upload your profile image (jpeg, png, jpg, gif, svg with max size 2048KB) or send 'SKIP' to skip this step:", nil)
 }
 
@@ -69,10 +68,10 @@ func (b *Bot) handlePhotoImage(msg *tgbotapi.Message) {
 		b.replyWithMessage(msg.Chat.ID, fmt.Sprintf("Failed to download the image: %v. Please try again.", err), nil)
 		return
 	}
-	b.states[msg.Chat.ID].Data.ImageData = imageData
+	b.setDataForImageState(msg.Chat.ID, setImage, imageData)
 }
 func (b *Bot) handleSkipImage(msg *tgbotapi.Message) {
-	b.states[msg.Chat.ID].Data.ImageData = nil
+	b.setDataForImageState(msg.Chat.ID, setImage, nil)
 }
 
 func (b *Bot) handleInvalidImageInput(msg *tgbotapi.Message) {
@@ -81,7 +80,7 @@ func (b *Bot) handleInvalidImageInput(msg *tgbotapi.Message) {
 
 func (b *Bot) handleRegistration(msg *tgbotapi.Message) {
 	// Call the Register function with the collected data
-	registerData := b.states[msg.Chat.ID].Data
+	registerData := b.GetUserState(msg.Chat.ID).Data
 	validationErr, err := b.apiClient.Register(registerData, msg.Chat.ID, b.auth)
 	if err == nil {
 		b.handleRegistrationSuccess(msg, registerData)
@@ -90,7 +89,7 @@ func (b *Bot) handleRegistration(msg *tgbotapi.Message) {
 	}
 
 	// Clear the state for this chat
-	delete(b.states, msg.Chat.ID)
+	b.DeleteUserState(msg.Chat.ID)
 }
 
 // handleSharedContact processes the contact shared by the user.
@@ -98,14 +97,7 @@ func (b *Bot) handleRegistration(msg *tgbotapi.Message) {
 func (b *Bot) handleSharedContact(msg *tgbotapi.Message) {
 	contact := msg.Contact
 	// Initialize the state for this chat
-	b.states[msg.Chat.ID] = &UserState{
-		CurrentStep: "address",
-		Data: api.RegisterData{
-			LastName:  contact.LastName,
-			FirstName: contact.FirstName,
-			Phone:     contact.PhoneNumber,
-		},
-	}
+	b.initUserState(msg.Chat.ID, contact)
 
 	// Ask for the address
 	b.replyWithMessage(msg.Chat.ID, "Please share your address or send your current location:", createLocationKeyboard())
@@ -113,9 +105,9 @@ func (b *Bot) handleSharedContact(msg *tgbotapi.Message) {
 
 // handleMakeOrder displays the list of products for ordering.
 // It also sends an inline keyboard with paging and search button.
-func (b *Bot) handleMakeOrder(chatID int64, page int) {
+func (b *Bot) handleMakeOrder(chatID int64, page int, search string) {
 	// Call the API to retrieve the list of products
-	products, hasNextPage, err := b.apiClient.GetProducts(perPage, page, b.auth, chatID)
+	products, hasNextPage, err := b.apiClient.GetProducts(perPage, page, b.auth, chatID, search)
 	if err != nil {
 		b.replyWithMessage(chatID, fmt.Sprintf("An error occurred while fetching products: %v. Please try again later.", err), nil)
 		return
@@ -153,11 +145,33 @@ func (b *Bot) handleMakeOrder(chatID int64, page int) {
 	}
 
 	// Send the inline keyboard with paging and the search button
-	menu := createPaginationKeyboard(page, hasNextPage)
+	var menu tgbotapi.InlineKeyboardMarkup
+	var menuText string
+	if search != "" {
+		menu = createPaginationKeyboard(page, hasNextPage, search)
+		menuText = fmt.Sprintf("Results for '%s'. Use the buttons below to navigate between pages:", search)
+	} else {
+		menu = createPaginationKeyboard(page, hasNextPage, "")
+		menuText = "Use the buttons below to navigate between pages or search for a specific product:"
+	}
+	b.sendTextMessageWithReplyMarkup(chatID, menuText, menu)
+}
 
-	msg := tgbotapi.NewMessage(chatID, "Use the buttons below to navigate between pages or search for a specific product:")
-	msg.ReplyMarkup = menu
-	b.bot.Send(msg)
+func (b *Bot) handleSearchInit(chatID int64) {
+	b.initUserState(chatID, nil) // Assuming initUserState can handle nil contact
+	b.setDataForState(chatID, setCurrentStep, "search")
+	b.replyWithMessage(chatID, "Please enter a product name to search for:", nil)
+}
+
+func (b *Bot) handleSearch(chatID int64, page int, searchQuery string) {
+	// If searchQuery is empty, prompt the user to enter a search query
+	if searchQuery == "" {
+		b.replyWithMessage(chatID, "Please enter a product name to search for:", nil)
+		return
+	}
+	b.DeleteUserState(chatID)
+	// Call the refactored handleMakeOrder with the search query
+	b.handleMakeOrder(chatID, page, searchQuery)
 }
 
 // handleCallbackQuery handles the callback queries from the inline keyboard buttons.
@@ -170,15 +184,11 @@ func (b *Bot) handleCallbackQuery(callbackQuery *tgbotapi.CallbackQuery) {
 	case data == "disabled":
 		return
 	case strings.HasPrefix(data, "previous_page_"):
-		page, _ := strconv.Atoi(strings.TrimPrefix(data, "previous_page_"))
-		page -= 1
-		b.handleMakeOrder(chatID, page)
+		b.handlePreviousPage(data, chatID)
 	case strings.HasPrefix(data, "next_page_"):
-		page, _ := strconv.Atoi(strings.TrimPrefix(data, "next_page_"))
-		page += 1
-		b.handleMakeOrder(chatID, page)
+		b.handleNextPage(data, chatID)
 	case data == "search":
-		// Implement search functionality here
+		b.handleSearchInit(chatID)
 	case data == "upload_avatar" || data == "edit_image":
 		b.setUserEditingState(chatID, "image")
 		b.replyWithMessage(chatID, "Please upload your new profile image.", nil)
@@ -199,43 +209,12 @@ func (b *Bot) handleCallbackQuery(callbackQuery *tgbotapi.CallbackQuery) {
 
 	case data == "back":
 		b.sendMenu(chatID)
-	case data == "edit_cart":
-		b.handleMakeOrder(chatID, 1)
+	case data == "modify_cart":
+		b.handleMakeOrder(chatID, 1, "")
 	case data == "complete_order":
-		b.handleCompleteOrder(chatID)
+		b.handleCompleteOrder(chatID, false)
 	case data == "cart":
-		err := b.InitUserCart(chatID)
-		if err != nil {
-			log.Printf("Error initializing user cart: %v", err)
-		}
-		cartItems, err := b.apiClient.GetCartItems(b.auth, true, chatID)
-		if err != nil {
-			b.replyWithMessage(chatID, "An error occurred while fetching your cart. Please try again.", nil)
-		} else if len(cartItems) == 0 {
-			b.replyWithMessage(chatID, "Your cart is empty.", nil)
-		} else {
-			cartMessage := "Shopping Cart Items: \n"
-			totalCost := 0.0
-			for _, cartItem := range cartItems {
-				itemTotalPrice := float64(cartItem.Quantity) * cartItem.Price
-				totalCost += itemTotalPrice
-				cartMessage += fmt.Sprintf("<b>%s:</b> %d items | $%.2f \n", html.EscapeString(cartItem.ProductName), cartItem.Quantity, itemTotalPrice)
-			}
-			cartMessage += fmt.Sprintf("\nTotal : $%.2f", totalCost)
-
-			textMsg := tgbotapi.NewMessage(chatID, cartMessage)
-			textMsg.ParseMode = "HTML"
-			b.bot.Send(textMsg)
-
-			// Add 'Edit Cart' and 'Complete Order' buttons
-			editCartButton := tgbotapi.NewInlineKeyboardButtonData("🛒 Edit the Cart", "edit_cart")
-			completeOrderButton := tgbotapi.NewInlineKeyboardButtonData("🛍 Complete Order", "complete_order")
-			inlineKeyboard := tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(editCartButton, completeOrderButton))
-
-			textMsg = tgbotapi.NewMessage(chatID, "Choose your action:")
-			textMsg.ReplyMarkup = inlineKeyboard
-			b.bot.Send(textMsg)
-		}
+		b.handleCartAction(chatID)
 	case strings.HasPrefix(data, "add_to_cart_"):
 		productID, _ := strconv.Atoi(strings.TrimPrefix(data, "add_to_cart_"))
 		if !b.isMostRecentMessage(chatID, messageID, productID) {
@@ -276,6 +255,70 @@ func (b *Bot) handleCallbackQuery(callbackQuery *tgbotapi.CallbackQuery) {
 
 	// Acknowledge the callback query
 	b.bot.AnswerCallbackQuery(tgbotapi.NewCallback(callbackQuery.ID, ""))
+}
+
+func (b *Bot) handleCartAction(chatID int64) {
+	err := b.InitUserCart(chatID)
+	if err != nil {
+		log.Printf("Error initializing user cart: %v", err)
+	}
+	cartItems, err := b.apiClient.GetCartItems(b.auth, true, chatID)
+	if err != nil {
+		b.replyWithMessage(chatID, "An error occurred while fetching your cart. Please try again.", nil)
+	} else if len(cartItems) == 0 {
+		b.replyWithMessage(chatID, "Your cart is empty.", nil)
+	} else {
+		b.handleUserCart(cartItems, chatID)
+	}
+}
+
+func (b *Bot) handlePreviousPage(data string, chatID int64) {
+	parts := strings.Split(data, "_")
+	page, _ := strconv.Atoi(parts[2])
+	page -= 1
+	search := ""
+	if len(parts) > 3 {
+		search, _ = url.QueryUnescape(parts[3])
+	}
+	b.handleMakeOrder(chatID, page, search)
+}
+
+func (b *Bot) handleNextPage(data string, chatID int64) {
+	parts := strings.Split(data, "_")
+	page, _ := strconv.Atoi(parts[2])
+	page += 1
+	search := ""
+	if len(parts) > 3 {
+		search, _ = url.QueryUnescape(parts[3])
+	}
+	b.handleMakeOrder(chatID, page, search)
+}
+
+func (b *Bot) handleUserCart(cartItems []api.CartItem, chatID int64) {
+	cartMessage := "Shopping Cart Items: \n"
+	totalCost := 0.0
+	for _, cartItem := range cartItems {
+		itemTotalPrice := float64(cartItem.Quantity) * cartItem.Price
+		totalCost += itemTotalPrice
+		cartMessage += fmt.Sprintf("<b>%s:</b> %d items | $%.2f \n", html.EscapeString(cartItem.ProductName), cartItem.Quantity, itemTotalPrice)
+	}
+	cartMessage += fmt.Sprintf("\nTotal : $%.2f", totalCost)
+
+	textMsg := tgbotapi.NewMessage(chatID, cartMessage)
+	textMsg.ParseMode = "HTML"
+	b.bot.Send(textMsg)
+
+	// Add 'Edit Cart' and 'Complete Order' buttons
+	editCartButton := tgbotapi.NewInlineKeyboardButtonData("🛒 Edit the Cart", "modify_cart")
+	completeOrderButton := tgbotapi.NewInlineKeyboardButtonData("🛍 Complete Order", "complete_order")
+	inlineKeyboard := tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(editCartButton, completeOrderButton))
+	b.sendTextMessageWithReplyMarkup(chatID, "Choose your action:", inlineKeyboard)
+}
+
+func (b *Bot) sendTextMessageWithReplyMarkup(chatID int64, text string, replyMarkup interface{}) {
+	msg := tgbotapi.NewMessage(chatID, text)
+	msg.ReplyMarkup = replyMarkup
+	b.bot.Send(msg)
 }
 
 func (b *Bot) reduceOrIncreaseAmountInCart(chatID int64, productID int, amount int, remove bool) error {
@@ -330,7 +373,7 @@ func (b *Bot) handleRegistrationFailure(msg *tgbotapi.Message, err error, valida
 	}
 
 	// Clear the state for this chat
-	delete(b.states, msg.Chat.ID)
+	b.DeleteUserState(msg.Chat.ID)
 }
 
 func (b *Bot) handleRegistrationSuccess(msg *tgbotapi.Message, registerData api.RegisterData) {
@@ -341,13 +384,16 @@ func (b *Bot) handleRegistrationSuccess(msg *tgbotapi.Message, registerData api.
 	b.sendMenu(msg.Chat.ID)
 
 	// Clear the state for this chat
-	delete(b.states, msg.Chat.ID)
+	b.DeleteUserState(msg.Chat.ID)
 }
 
 // handleCompleteOrder processes the user's request to complete an order.
-func (b *Bot) handleCompleteOrder(chatID int64) {
+func (b *Bot) handleCompleteOrder(chatID int64, sendMenuOnFailing bool) {
 	if len(b.cart[chatID]) == 0 {
 		b.replyWithMessage(chatID, "Your cart is empty. Please add at least one product to the cart before placing an order.", nil)
+		if sendMenuOnFailing == true {
+			b.sendMenu(chatID)
+		}
 		return
 	}
 	// Call the CompleteOrder function of the APIClient to complete the order
@@ -367,7 +413,8 @@ func (b *Bot) handleCompleteOrder(chatID int64) {
 
 	for _, item := range orderResponse.Data.OrderItems {
 		responseMsg += fmt.Sprintf(
-			"\nQuantity: %d\nPrice: %.2f\n",
+			"\n%s\nQuantity: %d\nPrice: %.2f\n",
+			item.ProductName,
 			item.Quantity,
 			item.Price,
 		)
@@ -408,10 +455,9 @@ func (b *Bot) handleMyAccount(chatID int64, accountInfoFromUpdate *api.AccountIn
 	} else {
 		// Create and send the upload button
 		uploadButton := tgbotapi.NewInlineKeyboardButtonData("Upload Image", "upload_avatar")
-		buttonMsg := tgbotapi.NewMessage(chatID, "You don't have an avatar image yet. Please upload one:")
-		buttonMsg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
-			tgbotapi.NewInlineKeyboardRow(uploadButton))
-		b.bot.Send(buttonMsg)
+		b.sendTextMessageWithReplyMarkup(chatID, "You don't have an avatar image yet. Please upload one:",
+			tgbotapi.NewInlineKeyboardMarkup(
+				tgbotapi.NewInlineKeyboardRow(uploadButton)))
 	}
 
 	// Handle other fields
@@ -424,6 +470,7 @@ func (b *Bot) handleMyAccount(chatID int64, accountInfoFromUpdate *api.AccountIn
 	msg := tgbotapi.NewMessage(chatID, daysMessage)
 	msg.ParseMode = "Markdown"
 	b.bot.Send(msg)
+	b.sendMenu(chatID)
 }
 
 func (b *Bot) sendMessageWithEditButton(chatID int64, msgText, editData string) {
@@ -433,4 +480,63 @@ func (b *Bot) sendMessageWithEditButton(chatID int64, msgText, editData string) 
 	msg.ReplyMarkup = keyboard
 	msg.ParseMode = "Markdown"
 	b.bot.Send(msg)
+}
+
+func (b *Bot) handleOrderHistory(chatID int64) {
+	orderHistory, err := b.apiClient.GetOrderHistory(b.auth, chatID)
+	if err != nil {
+		b.replyWithMessage(chatID, "Error fetching order history. Please try again later.", nil)
+		return
+	}
+
+	if len(orderHistory.Data) == 0 {
+		b.replyWithMessage(chatID, "You have no orders yet. Start shopping to see your orders here! 🛍️", nil)
+		return
+	}
+
+	reversedOrders := reverseOrderArray(orderHistory.Data)
+
+	for i, order := range reversedOrders {
+		orderNumber := len(reversedOrders) - i
+		orderStatus := strings.ToUpper(order.Status)
+		orderTotalPrice := fmt.Sprintf("%.2f💲", order.TotalPrice)
+
+		timestamp, err := time.Parse(time.RFC3339Nano, order.OrderItems[0].CreatedAt)
+		if err != nil {
+			fmt.Println("Error parsing timestamp:", err)
+			continue
+		}
+		orderCreatedAt := timestamp.Format("Monday, 02 January 2006")
+
+		var orderItemsStrings []string
+		for _, item := range order.OrderItems {
+			orderItemsStrings = append(orderItemsStrings, fmt.Sprintf("%d x %s", item.Quantity, item.ProductName))
+		}
+		orderItemsList := strings.Join(orderItemsStrings, "\n")
+
+		messageText := fmt.Sprintf(
+			"*Order #%d* 📦\n"+
+				"*Status:* `%s`\n"+
+				"*Total Price: *%s\n"+
+				"*Date:* %s\n"+
+				"*Items:*\n%s",
+			orderNumber, orderStatus, orderTotalPrice, orderCreatedAt, orderItemsList,
+		)
+		msg := tgbotapi.NewMessage(chatID, messageText)
+		msg.ParseMode = "Markdown"
+		b.bot.Send(msg)
+	}
+	b.sendMenu(chatID)
+}
+
+func reverseOrderArray(orders []api.OrderResponseItem) []api.OrderResponseItem {
+	// Create a new slice to hold the reversed order
+	reversed := make([]api.OrderResponseItem, len(orders))
+
+	// Iterate through the original slice in reverse order and copy each element to the new slice
+	for i, j := len(orders)-1, 0; i >= 0; i, j = i-1, j+1 {
+		reversed[j] = orders[i]
+	}
+
+	return reversed
 }

@@ -93,11 +93,16 @@ func (b *Bot) initUserState(chatID int64, contact *tgbotapi.Contact) {
 		state := &UserState{}
 		if contact != nil {
 			state.CurrentStep = "address"
-			state.Data = api.RegisterData{
-				LastName:  contact.LastName,
-				FirstName: contact.FirstName,
-				Phone:     contact.PhoneNumber,
+			data := api.RegisterData{
+				Phone: contact.PhoneNumber,
 			}
+			if contact.FirstName != "" {
+				data.FirstName = contact.FirstName
+			}
+			if contact.LastName != "" {
+				data.LastName = contact.LastName
+			}
+			state.Data = data
 		} else {
 			state.CurrentStep = ""
 			state.Data = api.RegisterData{} // Initializing Data to an empty RegisterData struct

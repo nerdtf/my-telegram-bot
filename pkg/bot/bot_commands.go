@@ -267,6 +267,7 @@ func (b *Bot) handleCartAction(chatID int64) {
 		b.replyWithMessage(chatID, "An error occurred while fetching your cart. Please try again.", nil)
 	} else if len(cartItems) == 0 {
 		b.replyWithMessage(chatID, "Your cart is empty.", nil)
+		b.sendMenu(chatID)
 	} else {
 		b.handleUserCart(cartItems, chatID)
 	}
@@ -400,6 +401,7 @@ func (b *Bot) handleCompleteOrder(chatID int64, sendMenuOnFailing bool) {
 	orderResponse, err := b.apiClient.CompleteOrder(b.auth, chatID)
 	if err != nil {
 		b.replyWithMessage(chatID, fmt.Sprintf("Error completing the order: %v Please try again later.", err), nil)
+		b.sendMenu(chatID)
 		return
 	}
 
@@ -431,6 +433,7 @@ func (b *Bot) handleCompleteOrder(chatID int64, sendMenuOnFailing bool) {
 
 	// Clear the cart entirely
 	delete(b.cart, chatID)
+	b.sendMenu(chatID)
 }
 
 // handleMyAccount fetches and displays the user's account details and provides editing options.
@@ -486,11 +489,13 @@ func (b *Bot) handleOrderHistory(chatID int64) {
 	orderHistory, err := b.apiClient.GetOrderHistory(b.auth, chatID)
 	if err != nil {
 		b.replyWithMessage(chatID, "Error fetching order history. Please try again later.", nil)
+		b.sendMenu(chatID)
 		return
 	}
 
 	if len(orderHistory.Data) == 0 {
 		b.replyWithMessage(chatID, "You have no orders yet. Start shopping to see your orders here! 🛍️", nil)
+		b.sendMenu(chatID)
 		return
 	}
 

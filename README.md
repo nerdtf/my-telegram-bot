@@ -28,10 +28,6 @@ This project uses the following dependencies:
 
 ### Usage Instructions
 
-#### Keyboards
-
-The bot utilizes various keyboards to enhance user interaction. Below is a brief overview of the provided keyboards:
-
 **Getting Started**
 Initiate your interaction with the bot by sending the /start command. This will introduce you to the main functionalities and guide you through the initial setup process.
 
